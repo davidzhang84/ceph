@@ -1301,6 +1301,9 @@ void Server::handle_client_request(MClientRequest *req)
 
 void Server::handle_osd_map()
 {
+  /* Note that we check the OSDMAP_FULL flag directly rather than
+   * using osdmap_full_flag(), because we want to know "is the flag set"
+   * rather than "does the flag apply to us?" */
   const OSDMap *osdmap = mds->objecter->get_osdmap_read();
   is_full = osdmap->test_flag(CEPH_OSDMAP_FULL);
   dout(7) << __func__ << ": full = " << is_full << " epoch = " << osdmap->get_epoch() << dendl;
