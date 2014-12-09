@@ -2013,12 +2013,22 @@ void Client::handle_osd_map(MOSDMap *m)
 {
   if (objecter->osdmap_full_flag()) {
     ldout(cct, 1) << __func__ << ": FULL: cancelling outstanding operations" << dendl;
+
+    // For all inodes with a pending flush write op (i.e. one of the ones we
+    // will cancel), we've got to purge_set their data from ObjectCacher
+    // so that it doesn't re-issue the write in response to the ENOSPC error.
+    
+    // We can *only* do this if there is a file handle open, because otherwise
+    // there is nobody to surface the error code to, and we would be silently
+    // dropping data
+
     // Cancel all outstanding ops with -ENOSPC: it is necessary to do this rather than blocking,
     // because otherwise when we fill up we potentially lock caps forever on files with
     // dirty pages, and we need to be able to release those caps to the MDS so that it can
     // delete files and free up space.
-
     epoch_t cancelled_epoch = objecter->op_cancel_writes(-ENOSPC);
+
+
     set_cap_epoch_barrier(cancelled_epoch);
   }
 
@@ -3781,31 +3791,6 @@ void Client::handle_snap(MClientSnap *m)
   m->put();
 }
 
-class RetryCapMessage : public Context
-{
-protected:
-  Client *client;
-  MClientCaps *m;
-public:
-  RetryCapMessage(Client *client_, MClientCaps *m_) : client(client_), m(m_) {
-    assert(m != NULL);
-    assert(client != NULL);
-  }
-
-  void finish(int r) {
-    client->_retry_handle_caps(m);
-  }
-};
-
-void Client::_retry_handle_caps(MClientCaps *m)
-{
-  ldout(cct, 10) << __func__ << ": retrying " << *m << dendl;
-
-  client_lock.Lock();
-  handle_caps(m);
-  client_lock.Unlock();
-}
-
 void Client::handle_caps(MClientCaps *m)
 {
   mds_rank_t mds = mds_rank_t(m->get_source().num());
@@ -3816,20 +3801,12 @@ void Client::handle_caps(MClientCaps *m)
   }
 
   if (m->osd_epoch_barrier && !objecter->have_map(m->osd_epoch_barrier)) {
-    RetryCapMessage *rcm = new RetryCapMessage(this, m);
-    C_OnFinisher *cof = new C_OnFinisher(rcm, &objecter_finisher);
-
-    if (objecter->wait_for_map(m->osd_epoch_barrier, cof)) {
-      // Never mind, already have map, proceed
-      delete cof;
-      delete rcm;
-    } else {
-      ldout(cct, 5) << __func__ << ": waiting for OSD epoch " << m->osd_epoch_barrier << dendl;
-      return;
-    }
+    // Pause RADOS operations until we see the required epoch
+    objecter->set_epoch_barrier(m->osd_epoch_barrier);
   }
 
   if (m->osd_epoch_barrier > cap_epoch_barrier) {
+    // Record the barrier so that we will transmit it to MDS when releasing
     set_cap_epoch_barrier(m->osd_epoch_barrier);
   }
 

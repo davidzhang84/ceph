@@ -508,7 +508,6 @@ protected:
 			      vector<snapid_t>& snaps);
 
   void handle_snap(struct MClientSnap *m);
-  void _retry_handle_caps(class MClientCaps *m);
   void handle_caps(class MClientCaps *m);
   void handle_cap_import(MetaSession *session, Inode *in, class MClientCaps *m);
   void handle_cap_export(MetaSession *session, Inode *in, class MClientCaps *m);
