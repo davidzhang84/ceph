@@ -2386,6 +2386,13 @@ void Client::put_inode(Inode *in, int n)
     in->snaprealm_item.remove_myself();
     if (in == root)
       root = 0;
+
+    if (!in->oset.objects.empty()) {
+      ldout(cct, 0) << __func__ << ": leftover objects on inode 0x"
+        << std::hex << in->ino << std::dec << dendl;
+      assert(in->oset.objects.empty());
+    }
+
     delete in->fcntl_locks;
     delete in->flock_locks;
     delete in;
@@ -3096,10 +3103,10 @@ bool Client::_flush(Inode *in, Context *onfinish)
 
   if (objecter->osdmap_full_flag()) {
     ldout(cct, 1) << __func__ << ": FULL, purging for ENOSPC" << dendl;
+    objectcacher->purge_set(&in->oset);
     if (onfinish) {
       onfinish->complete(-ENOSPC);
     }
-    objectcacher->purge_set(&in->oset);
     return true;
   }
 
@@ -4068,6 +4075,10 @@ class C_Client_FlushComplete : public Context {
   void finish(int r) {
     assert(client->client_lock.is_locked_by_me());
     if (r != 0) {
+      client_t const whoami = client->whoami;
+      ldout(client->cct, 1) << "I/O error from flush on inode " << inode
+        << " 0x" << std::hex << inode->ino << std::dec
+        << ": " << r << "(" << cpp_strerror(r) << ")" << dendl;
       inode->async_err = r;
     }
     client->put_inode(inode);
