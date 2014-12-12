@@ -7289,6 +7289,13 @@ int Client::_fsync(Fh *f, bool syncdataonly)
     ldout(cct, 1) << "ino " << in->ino << " failed to commit to disk! "
 		  << cpp_strerror(-r) << dendl;
   }
+
+  if (in->async_err) {
+    ldout(cct, 1) << "ino " << in->ino << " marked with error from background flush! "
+		  << cpp_strerror(in->async_err) << dendl;
+    r = in->async_err;
+  }
+
   return r;
 }
 
