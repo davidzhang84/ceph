@@ -2012,21 +2012,31 @@ void Client::handle_osd_map(MOSDMap *m)
 {
   if (objecter->osdmap_full_flag()) {
     ldout(cct, 1) << __func__ << ": FULL: cancelling outstanding operations" << dendl;
-
-    // For all inodes with a pending flush write op (i.e. one of the ones we
-    // will cancel), we've got to purge_set their data from ObjectCacher
-    // so that it doesn't re-issue the write in response to the ENOSPC error.
-    
-    // We can *only* do this if there is a file handle open, because otherwise
-    // there is nobody to surface the error code to, and we would be silently
-    // dropping data
-
     // Cancel all outstanding ops with -ENOSPC: it is necessary to do this rather than blocking,
     // because otherwise when we fill up we potentially lock caps forever on files with
     // dirty pages, and we need to be able to release those caps to the MDS so that it can
     // delete files and free up space.
     epoch_t cancelled_epoch = objecter->op_cancel_writes(-ENOSPC);
 
+    // For all inodes with a pending flush write op (i.e. one of the ones we
+    // will cancel), we've got to purge_set their data from ObjectCacher
+    // so that it doesn't re-issue the write in response to the ENOSPC error.
+    // Fortunately since we're cancelling *everything*, we don't need to know
+    // which ops belong to which ObjectSet, we can just blow all the un-flushed
+    // cached data away and mark any dirty inodes' async_err field with -ENOSPC
+    // (i.e. we only need to know which inodes had outstanding ops, not the exact
+    // op-to-inode relation)
+    for (unordered_map<vinodeno_t,Inode*>::iterator i = inode_map.begin();
+         i != inode_map.end(); i++)
+    {
+      Inode *inode = i->second;
+      if (inode->oset.dirty_or_tx) {
+        ldout(cct, 4) << __func__ << ": FULL: inode 0x" << std::hex << i->first << std::dec
+          << " has dirty objects, purging and setting ENOSPC" << dendl;
+        objectcacher->purge_set(&inode->oset);
+        inode->async_err = -ENOSPC;
+      }
+    }
 
     set_cap_epoch_barrier(cancelled_epoch);
   }
