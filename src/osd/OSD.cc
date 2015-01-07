@@ -2036,7 +2036,8 @@ void OSD::final_init()
     "injectdataerr",
     "injectdataerr " \
     "name=pool,type=CephString " \
-    "name=objname,type=CephObjectname",
+    "name=objname,type=CephObjectname " \
+    "name=shardid,type=CephInt,req=false,range=0|255",
     test_ops_hook,
     "inject data error into omap");
   assert(r == 0);
@@ -2045,7 +2046,8 @@ void OSD::final_init()
     "injectmdataerr",
     "injectmdataerr " \
     "name=pool,type=CephString " \
-    "name=objname,type=CephObjectname",
+    "name=objname,type=CephObjectname " \
+    "name=shardid,type=CephInt,req=false,range=0|255",
     test_ops_hook,
     "inject metadata error");
   assert(r == 0);
@@ -3980,13 +3982,26 @@ void TestOpsSocketHook::test_ops(OSDService *service, ObjectStore *store,
       ss << "Invalid namespace/objname";
       return;
     }
-    if (curmap->pg_is_ec(rawpg)) {
-      ss << "Must not call on ec pool";
-      return;
-    }
-    spg_t pgid = spg_t(curmap->raw_pg_to_pg(rawpg), shard_id_t::NO_SHARD);
 
+    spg_t pgid;
     hobject_t obj(object_t(objname), string(""), CEPH_NOSNAP, rawpg.ps(), pool, nspace);
+    ghobject_t gobj;
+    if (curmap->pg_is_ec(rawpg)) {
+        if ((command != "injectdataerr") && (command != "injectmdataerr")) {
+            ss << "Must not call on ec pool, except injectdataerr or injectmdataerr";
+            return;
+        }
+        
+        int64_t shardid;
+        cmd_getval(service->cct, cmdmap, "shardid", shardid, int64_t(0));
+        ghobject_t gobjtmp(obj, ghobject_t::NO_GEN, shard_id_t(uint8_t(shardid)));
+        gobj.swap(gobjtmp);
+        ss << "erasure code ghobject: " << gobj << "\n";
+    }
+    else {
+        pgid = spg_t(curmap->raw_pg_to_pg(rawpg), shard_id_t::NO_SHARD);
+    }
+
     ObjectStore::Transaction t;
 
     if (command == "setomapval") {
@@ -4052,11 +4067,21 @@ void TestOpsSocketHook::test_ops(OSDService *service, ObjectStore *store,
       else
 	ss << "ok";
     } else if (command == "injectdataerr") {
-      store->inject_data_error(obj);
-      ss << "ok";
+        if (curmap->pg_is_ec(rawpg)) {
+            store->inject_data_error(gobj);
+        }
+        else {
+            store->inject_data_error(obj);
+        }
+        ss << "ok";
     } else if (command == "injectmdataerr") {
-      store->inject_mdata_error(obj);
-      ss << "ok";
+        if (curmap->pg_is_ec(rawpg)) {
+            store->inject_mdata_error(gobj);
+        }
+        else {
+            store->inject_mdata_error(obj);
+        }
+        ss << "ok";
     }
     return;
   }
