@@ -3938,8 +3938,8 @@ void OSD::check_ops_in_flight()
 //   setomapheader <pool-id> [namespace/]<obj-name> <header>
 //   getomap <pool> [namespace/]<obj-name>
 //   truncobj <pool-id> [namespace/]<obj-name> <newlen>
-//   injectmdataerr [namespace/]<obj-name>
-//   injectdataerr [namespace/]<obj-name>
+//   injectmdataerr [namespace/]<obj-name> [shardid]
+//   injectdataerr [namespace/]<obj-name> [shardid]
 void TestOpsSocketHook::test_ops(OSDService *service, ObjectStore *store,
      std::string command, cmdmap_t& cmdmap, ostream &ss)
 {
@@ -3983,23 +3983,16 @@ void TestOpsSocketHook::test_ops(OSDService *service, ObjectStore *store,
       return;
     }
 
-    spg_t pgid;
+    uint8_t shardid;
+    cmd_getval(service->cct, cmdmap, "shardid", shardid, uint8_t(shard_id_t::NO_SHARD));
     hobject_t obj(object_t(objname), string(""), CEPH_NOSNAP, rawpg.ps(), pool, nspace);
-    ghobject_t gobj;
+    ghobject_t gobj(obj, ghobject_t::NO_GEN, shard_id_t(shardid));
+    spg_t pgid(curmap->raw_pg_to_pg(rawpg), shard_id_t(shardid));
     if (curmap->pg_is_ec(rawpg)) {
         if ((command != "injectdataerr") && (command != "injectmdataerr")) {
             ss << "Must not call on ec pool, except injectdataerr or injectmdataerr";
             return;
         }
-        
-        int64_t shardid;
-        cmd_getval(service->cct, cmdmap, "shardid", shardid, int64_t(0));
-        ghobject_t gobjtmp(obj, ghobject_t::NO_GEN, shard_id_t(uint8_t(shardid)));
-        gobj.swap(gobjtmp);
-        ss << "erasure code ghobject: " << gobj << "\n";
-    }
-    else {
-        pgid = spg_t(curmap->raw_pg_to_pg(rawpg), shard_id_t::NO_SHARD);
     }
 
     ObjectStore::Transaction t;
@@ -4067,21 +4060,11 @@ void TestOpsSocketHook::test_ops(OSDService *service, ObjectStore *store,
       else
 	ss << "ok";
     } else if (command == "injectdataerr") {
-        if (curmap->pg_is_ec(rawpg)) {
-            store->inject_data_error(gobj);
-        }
-        else {
-            store->inject_data_error(obj);
-        }
-        ss << "ok";
+      store->inject_data_error(gobj);
+      ss << "ok";
     } else if (command == "injectmdataerr") {
-        if (curmap->pg_is_ec(rawpg)) {
-            store->inject_mdata_error(gobj);
-        }
-        else {
-            store->inject_mdata_error(obj);
-        }
-        ss << "ok";
+      store->inject_mdata_error(gobj);
+      ss << "ok";
     }
     return;
   }
